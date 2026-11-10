@@ -1,0 +1,176 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Daftar</title>
+<style>
+  :root { --bg:#0b0c10; --card:#15171e; --text:#eef0f4; --muted:#9aa0ab; --accent:#f5a623; --ok:#2ecc71; --wa:#25d366; }
+  * { box-sizing:border-box; }
+  body { margin:0; font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif; background:var(--bg); color:var(--text); }
+  .wrap { max-width:960px; margin:0 auto; padding:24px 16px 60px; }
+  h1 { margin:0; font-size:30px; }
+  h1 small { font-size:16px; color:var(--muted); font-weight:400; }
+  .sub { color:var(--muted); margin:6px 0 20px; }
+  .card { background:var(--card); border-radius:12px; padding:16px; margin-bottom:16px; }
+  label { display:block; font-size:13px; color:var(--muted); margin-bottom:6px; }
+  input[type=password], select { width:100%; background:#0f1116; color:var(--text); border:1px solid #2a2d38; border-radius:8px; padding:10px; font:inherit; }
+  button { background:var(--accent); color:#111; border:0; border-radius:8px; padding:12px 18px; font-weight:700; cursor:pointer; font-size:15px; }
+  button:disabled { opacity:.5; cursor:wait; }
+  .row { display:flex; gap:12px; flex-wrap:wrap; align-items:flex-start; }
+  .drop { border:2px dashed #2a2d38; border-radius:10px; padding:18px; text-align:center; color:var(--muted); cursor:pointer; flex:1; min-width:240px; }
+  #preview { max-width:260px; max-height:260px; border-radius:8px; display:none; }
+  .stats { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:10px; }
+  .stat { background:#0f1116; border-radius:10px; padding:12px; }
+  .stat b { display:block; font-size:22px; color:var(--ok); }
+  .stat span { font-size:12px; color:var(--muted); }
+  table { width:100%; border-collapse:collapse; font-size:14px; }
+  th, td { text-align:left; padding:8px; border-bottom:1px solid #2a2d38; vertical-align:top; }
+  th { color:var(--muted); font-weight:600; }
+  .total { font-size:18px; font-weight:700; margin-top:10px; }
+  .msg { background:#0f1116; border-left:3px solid var(--wa); border-radius:8px; padding:10px 12px; margin:8px 0; }
+  .msg a { color:var(--wa); font-weight:600; text-decoration:none; font-size:13px; }
+  .msg p { margin:4px 0 6px; white-space:pre-wrap; }
+  #raw { white-space:pre-wrap; color:var(--muted); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Daftar <small>دفتر · the shopkeeper's credit notebook, digitized</small></h1>
+  <p class="sub">Millions of small shops track customer credit in a handwritten notebook. Snap a photo of a page: Muse Ember reads the handwriting in any language, builds a clean ledger, and writes polite WhatsApp reminders. Cost per page: a fraction of a cent.</p>
+
+  <div class="card">
+    <label>OpenRouter API key (stays in your browser, never stored)</label>
+    <input id="key" type="password" placeholder="sk-or-...">
+  </div>
+
+  <div class="card">
+    <div class="row">
+      <label class="drop" for="file">📷 Click to upload a photo of a notebook page
+        <input id="file" type="file" accept="image/*" style="display:none">
+      </label>
+      <img id="preview" alt="notebook page">
+    </div>
+    <div class="row" style="margin-top:12px; align-items:center">
+      <div style="flex:1; min-width:200px">
+        <label>Language for reminder messages</label>
+        <select id="lang">
+          <option>English</option>
+          <option>Tunisian Arabic (Derja)</option>
+          <option>Modern Standard Arabic</option>
+          <option>French</option>
+          <option>Spanish</option>
+          <option>Hindi</option>
+          <option>Swahili</option>
+        </select>
+      </div>
+      <div style="padding-top:18px"><button id="go">Digitize page</button></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="stats">
+      <div class="stat"><b id="cost">$0.0000</b><span>cost of this page</span></div>
+      <div class="stat"><b id="perdollar">-</b><span>pages digitized per $1</span></div>
+      <div class="stat"><b id="owed">-</b><span>total money owed to the shop</span></div>
+      <div class="stat"><b id="time">-</b><span>processing time</span></div>
+    </div>
+  </div>
+
+  <div class="card" id="ledgerCard" style="display:none">
+    <h3 style="margin-top:0">Ledger</h3>
+    <div id="ledger"></div>
+    <div class="total" id="totals"></div>
+  </div>
+
+  <div class="card" id="msgCard" style="display:none">
+    <h3 style="margin-top:0">WhatsApp reminders</h3>
+    <div id="msgs"></div>
+  </div>
+
+  <div class="card"><div id="raw">Upload a page to start.</div></div>
+</div>
+
+<script>
+const MODEL = "meta/muse-ember";
+const PRICE_IN = 0.10 / 1e6, PRICE_OUT = 0.50 / 1e6;
+let imageData = null;
+
+document.getElementById("file").onchange = (e) => {
+  const f = e.target.files[0]; if (!f) return;
+  const r = new FileReader();
+  r.onload = () => { imageData = r.result; const p = document.getElementById("preview"); p.src = imageData; p.style.display = "block"; };
+  r.readAsDataURL(f);
+};
+
+const PROMPT = (lang) => `This is a photo of a page from a small shop's handwritten customer credit notebook. It may be written in Arabic, French, English, or a mix, with abbreviations and local currency.
+Read every entry carefully. Return ONLY valid JSON, no markdown, with this shape:
+{
+  "currency": "detected currency code or symbol",
+  "entries": [ {"customer": "name", "date": "as written", "items": "what was bought, if written", "amount": number, "paid": number, "note": "anything unclear"} ],
+  "balances": [ {"customer": "name", "owed": number} ],
+  "total_owed": number,
+  "reminders": [ {"customer": "name", "message": "short, warm, respectful reminder written in ${lang}, mentioning the amount owed, suitable for WhatsApp"} ],
+  "insight": "one short practical tip for the shopkeeper based on this page"
+}
+Combine entries per customer in balances, subtracting anything marked as paid. Only include customers who still owe money in reminders.`;
+
+document.getElementById("go").onclick = async () => {
+  const key = document.getElementById("key").value.trim();
+  const raw = document.getElementById("raw");
+  if (!key) { raw.textContent = "Please paste your OpenRouter API key first."; return; }
+  if (!imageData) { raw.textContent = "Please upload a photo of a notebook page first."; return; }
+  const btn = document.getElementById("go");
+  btn.disabled = true; raw.textContent = "Muse Ember is reading the notebook...";
+  const t0 = performance.now();
+  try {
+    const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+      method: "POST",
+      headers: { "Authorization": "Bearer " + key, "Content-Type": "application/json", "X-Title": "Daftar" },
+      body: JSON.stringify({
+        model: MODEL,
+        messages: [{ role: "user", content: [
+          { type: "text", text: PROMPT(document.getElementById("lang").value) },
+          { type: "image_url", image_url: { url: imageData } }
+        ]}]
+      })
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error?.message || JSON.stringify(data));
+    const text = data.choices[0].message.content;
+    const u = data.usage || {};
+    const cost = (u.cost != null) ? u.cost : (u.prompt_tokens || 0) * PRICE_IN + (u.completion_tokens || 0) * PRICE_OUT;
+    document.getElementById("cost").textContent = "$" + cost.toFixed(5);
+    document.getElementById("perdollar").textContent = cost > 0 ? Math.floor(1 / cost).toLocaleString() : "-";
+    document.getElementById("time").textContent = ((performance.now() - t0) / 1000).toFixed(1) + "s";
+    show(text);
+  } catch (e) {
+    raw.textContent = "Error: " + e.message;
+  } finally { btn.disabled = false; }
+};
+
+function esc(s){ return String(s ?? "").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;"); }
+
+function show(text) {
+  const raw = document.getElementById("raw");
+  let j;
+  try { j = JSON.parse(text.slice(text.indexOf("{"), text.lastIndexOf("}") + 1)); }
+  catch { raw.textContent = text; return; }
+  const cur = j.currency || "";
+  let h = "<table><tr><th>Customer</th><th>Date</th><th>Items</th><th>Amount</th><th>Paid</th><th>Note</th></tr>";
+  (j.entries || []).forEach(e => h += `<tr><td>${esc(e.customer)}</td><td>${esc(e.date)}</td><td>${esc(e.items)}</td><td>${esc(e.amount)} ${esc(cur)}</td><td>${esc(e.paid || "")}</td><td>${esc(e.note)}</td></tr>`);
+  h += "</table><h4>Balance per customer</h4><table><tr><th>Customer</th><th>Owes</th></tr>";
+  (j.balances || []).forEach(b => h += `<tr><td>${esc(b.customer)}</td><td><b>${esc(b.owed)} ${esc(cur)}</b></td></tr>`);
+  h += "</table>";
+  document.getElementById("ledger").innerHTML = h;
+  document.getElementById("totals").textContent = "Total owed to the shop: " + (j.total_owed ?? "?") + " " + cur;
+  document.getElementById("owed").textContent = (j.total_owed ?? "-") + " " + cur;
+  document.getElementById("ledgerCard").style.display = "block";
+  document.getElementById("msgs").innerHTML = (j.reminders || []).map(r =>
+    `<div class="msg"><b>${esc(r.customer)}</b><p dir="auto">${esc(r.message)}</p><a target="_blank" href="https://wa.me/?text=${encodeURIComponent(r.message)}">Send on WhatsApp →</a></div>`).join("");
+  document.getElementById("msgCard").style.display = "block";
+  raw.textContent = j.insight ? "💡 Tip: " + j.insight : "";
+}
+</script>
+</body>
+</html>
